@@ -120,10 +120,6 @@ class bio_signal_marker:
         line.set_ydata(raw_signal)
         return 1
 
-def interpolation_1d(data, outPutLen, interpol_type = 'linear'):
-    f1 = interp1d(range(0, len(data)), data, kind=interpol_type)
-    inter1Peaks = f1(np.linspace(0, len(data) - 1, num=outPutLen))
-    return inter1Peaks
 
 if __name__ == '__main__':
     pass

@@ -1,10 +1,11 @@
 ## system packages
 import xml.etree.ElementTree as ET
+from datetime import datetime, time as datetime_time, timedelta
 import os
 ## sud-party packages
 import pyedflib
 import numpy as np
-from pandas import DataFrame
+from pandas import DataFrame, read_csv
 from biosppy.signals import tools as st
 ## custom packages
 from libs.signals import smoothing
@@ -425,3 +426,258 @@ def xml_parsing_start_info_flag_ver(xml_doc):
         pass
 
     return tmp_start_sec, tmp_end_sec, flag
+
+
+
+# function
+def time_slice_with_sleep_stage(subject_name, data_path='./label', tst=True):
+    """:cvar
+    subject의 파일 이름을 인자로 받아 해당 subject에 해당하는 annotation 값을 읽어 wake가 제외한
+    sleep stage 가 처음 시작 되는 부분을 start_time, wake를 제외한 마지막 sleep stage를 end_time 으로 정의
+    annotation 파일은 csv 형식으로 되어있음 (예: BOGN00005.csv)
+
+
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    w | w | w | N1 | N2 | N2 | w | w | w | w | w | N2 | w | w | N2 | N1 | N1 | N1 | N1 | w | w |
+               <----------------------------------------------------------------------->
+               O                                                                       O
+       (지점 start_time_sec)                                                  (지점 end_time_sec)
+    """
+    subject_df = read_csv(os.path.join(data_path, subject_name + '.csv'))
+    start_time_sec, end_time_sec = subject_df['Start Time'].iloc[0], subject_df['Start Time'].iloc[-1]
+
+    if tst:
+        sleep_stage = ['stage1', 'stage2', 'stage3', 'rem']
+        # forward
+        for tmp_idx, tmp_row in subject_df.iterrows():
+            tmp_event = tmp_row['Event']
+            tmp_time = tmp_row['Start Time']
+            # event 변수 공백 & 소문자 변환
+            tmp_event = tmp_event.strip().lower()
+            if tmp_event in sleep_stage:
+                start_time_sec = tmp_time
+                break
+
+        # backward
+        for tmp_i, tmp_r in subject_df[::-1].iterrows():
+            reverse_tmp_event = tmp_r['Event']
+            reverse_tmp_time = tmp_r['Start Time']
+            # event 변수 공백 & 소문자 변환
+            reverse_tmp_event = reverse_tmp_event.strip().lower()
+            if reverse_tmp_event in sleep_stage:
+                end_time_sec = reverse_tmp_time
+                break
+    else:
+        pass
+
+    return start_time_sec, end_time_sec
+
+
+def read_label(subject_name, fs=10, data_path='./label'):
+    """":cvar
+    subject 파일 이름을 인자로 받아 sleep stage 와 apnea hypopnea 를 인자로 주어진 sampling rate 로 추출
+    """
+    data_frame = read_csv(os.path.join(data_path, subject_name + '.csv'))
+    start, end = data_frame['Start Time'].iloc[0], data_frame['Start Time'].iloc[-1]
+    duration_sec = time_diff(start, end).seconds
+    # label 정의
+    apnea = np.zeros([int(duration_sec * fs), ])
+    hypopnea = np.zeros([int(duration_sec * fs), ])
+    sleep_stage = np.zeros([int(duration_sec * fs), ])
+    desaturation = np.zeros([int(duration_sec * fs), ])
+    arousal = np.zeros([int(duration_sec * fs), ])
+    # Events
+    stage_name = ['wake', 'stage1', 'stage2', 'stage3', 'rem']
+    event_name = ['centralapnea', 'obstructiveapnea', 'hypopnea', 'desaturation', 'arousal']
+    # unknown_event_name = ['mchg', 'cal', 'mt', 'mta', 'ma', 'ud1a', 'ud2', 'ud2a', 'udar', 'awake', 'rem aw']
+    # data iteration
+    for tmp_db in data_frame.iterrows():
+        # pasing iterated data
+        tmp_time, tmp_duration, tmp_event = tmp_db[1]
+        # event 변수 공백 제거 & 소문자 변환
+        tmp_event = tmp_event.strip().lower()
+        # 시작 지점 계산
+        tmp_event_start_sec = time_diff(start, tmp_time).seconds
+        tmp_event_start_idx = int(tmp_event_start_sec * fs)
+        # 관심 event or stage에 해당할 경우 label 추출
+        if tmp_event in event_name:
+            tmp_event_duration = int(tmp_duration * fs)
+            tmp_event_end_idx = tmp_event_start_idx + tmp_event_duration
+            # apnea
+            if tmp_event in ['centralapnea', 'obstructiveapnea']:
+                apnea[tmp_event_start_idx:tmp_event_end_idx] = 1
+            # hypopnea
+            elif tmp_event == 'hypopnea':
+                hypopnea[tmp_event_start_idx:tmp_event_end_idx] = 1
+            # desaturation
+            elif tmp_event == 'desaturation':
+                desaturation[tmp_event_start_idx:tmp_event_end_idx] = 1
+            # arousal
+            elif tmp_event == 'arousal':
+                arousal[tmp_event_start_idx:tmp_event_end_idx] = 1
+        # stage: [wake: 0, n1&n2: 1, n3: 2, rem: 3]
+        elif tmp_event in stage_name:
+            tmp_event_duration = int(30 * fs)  # stage 지속시간: 30초
+            tmp_event_end_idx = tmp_event_start_idx + tmp_event_duration
+            # wake
+            if tmp_event == 'wake':
+                sleep_stage[tmp_event_start_idx:tmp_event_end_idx] = 0
+            # n1&n2
+            elif tmp_event == 'stage1' or tmp_event == 'stage2':
+                sleep_stage[tmp_event_start_idx:tmp_event_end_idx] = 1
+            # n3
+            elif tmp_event == 'stage3':
+                sleep_stage[tmp_event_start_idx:tmp_event_end_idx] = 2
+            # rem
+            elif tmp_event == 'rem':
+                sleep_stage[tmp_event_start_idx:tmp_event_end_idx] = 3
+        else:
+            pass
+    # 리턴 값 반환
+    return apnea, hypopnea, sleep_stage, desaturation, arousal
+
+
+def read_edf_file(subject_name,
+                  data_path='./edf', label_path='./label', label_fs=10,
+                  tst=True,
+                  sig_labels=('EKG', 'ABDM')):
+    """:cvar
+    subject의 파일 이름을 인자로 받아 해당 subject에 해당 되는 신호를 EDF 파일로부터 읽어, time_slice_with_sleep_stage() 함수를 사용하여 앞뒤로 잘라 반환
+    모든 신호의 초단위 길이는 같아야한다.
+
+    return value는 딕셔너리,
+    signal 은 일단 ecg, abdominal 만 만들고 추후 dynamic하게 인자를 받아 들여 해당 인자의 신호만 읽도록 변경
+    label은 apnea, hypopnea, sleep stage 3개 반환
+
+    ## test code
+    from matplotlib import pyplot as plt
+    from scipy import signal
+    data_frame = read_edf_file('BOGN00003')
+    sig = data_frame['signal']['ABDM']
+    annotation = data_frame['label']['apnea'] + data_frame['label']['hypopnea']
+    print('apnea sec: {} sig sec: {}'.format(len(annotation) / 10, sig.__len__() / 50))
+    plt.plot(sig)
+    plt.plot(signal.resample(annotation, len(sig)) * 2000)
+
+    subject_names = os.listdir('G:\\data\\public_data\\Stanford Technology Analytics and Genomics in Sleep\\label')
+    subject_names = list(map(lambda x: x.split('.')[0], subject_names))
+    for tmp_subject in subject_names:
+        tmp_data_frame = read_edf_file(tmp_subject,
+                                       data_path='G:\\data\\public_data\\Stanford Technology Analytics and Genomics in Sleep\\edf',
+                                       label_path='G:\\data\\public_data\\Stanford Technology Analytics and Genomics in Sleep\\label')
+    """
+    # parameter 정의
+    sigs = []
+    sampling_rates = []
+    # edf 파일 읽기
+    try:
+        tmp_mesa_edf_f = pyedflib.EdfReader(os.path.join(data_path, subject_name + '.edf'))
+    except:
+        raise ValueError('can not read edf file ! ! ')
+    # 시작, 끝 시간 반환
+    start_time_label, end_time_label = time_slice_with_sleep_stage(subject_name, data_path=label_path, tst=False)
+    start_time_sec_edf = '{}:{}:{}'.format(tmp_mesa_edf_f.starttime_hour, tmp_mesa_edf_f.starttime_minute,
+                                           tmp_mesa_edf_f.starttime_second)
+    # EDF 와 label 시작 시간 싱크 맞추기 (3가지 경우 EDF의 시작시간이 label보다 짧을 경우, 긴경우, 같을 경우)
+    start_time_label_second = time_diff('00:00:00', start_time_label).seconds
+    start_time_edf_second = time_diff('00:00:00', start_time_sec_edf).seconds
+    if start_time_label_second < start_time_edf_second:
+        # label이 edf 보다 더 빨리 측정된 경우 (라벨을 잘라야함) 추후 테스트
+        print('label is longer than PSG ! ! !') # 테스트를 위한 print 문
+        edf_time_sec_start = 0
+        label_time_sec_start = start_time_edf_second - start_time_label_second
+        # 잘라준 만큼 start_time_label를 뒤로 shift
+        start_time_label_shift = datetime.strptime('1999-01-02 ' + start_time_label, '%Y-%m-%d %H:%M:%S') + timedelta(seconds=label_time_sec_start)
+        start_time_label = '{}:{}:{}'.format(start_time_label_shift.hour, start_time_label_shift.minute,
+                                             start_time_label_shift.second)
+    elif start_time_label_second > start_time_edf_second:
+        # edf 가 label 보다 더 빨리 측정된 경우 (신호를 잘라야함)
+        edf_time_sec_start = start_time_label_second - start_time_edf_second
+        label_time_sec_start = 0
+    else:
+        # edf 시작, label 시작 같을 경우
+        edf_time_sec_start = 0
+        label_time_sec_start = 0
+
+    start_time_tst, end_time_tst = time_slice_with_sleep_stage(subject_name, data_path=label_path, tst=tst)
+    # tst 기준 잘라야할 데이터 길이와 duration 반환
+    time_duration_tst = time_diff(start_time_tst, end_time_tst).seconds
+    time_diff_tst = time_diff(start_time_label, start_time_tst).seconds
+    # tst 가 위 부분 label 이 psg 보다 더 긴경우 잘렸을 때 잘린 시간안에 포함 될 때
+    if time_diff_tst < 0:
+        time_diff_tst = 0
+    # 끝 시간 을 label, PSG중 짧은 시간 기준으로 계산
+    # EDF 에서 읽은 끝 시간과 label 파일에서 읽은 끝시간을 초로 변환
+    time_duration_label = time_diff(start_time_label, end_time_label).seconds
+    time_duration_edf = tmp_mesa_edf_f.file_duration
+    # edf, label 두 데이터 중 짧게 측정된 신호로 끝 부분 slicing
+    if time_duration_edf >= time_duration_label:
+        edf_time_sec_end = time_duration_label
+    else:
+        edf_time_sec_end = time_duration_edf
+    # signal 읽기
+    # edf label 번호 및 sampling rate 읽기
+    edf_labels = np.array(tmp_mesa_edf_f.getSignalLabels())
+    edf_sampling_rates = np.array(tmp_mesa_edf_f.getSampleFrequencies())
+    # signal label 로 순회
+    for tmp_sig_label in sig_labels:
+        tmp_target_index = np.where(edf_labels == tmp_sig_label)[0][0]
+        tmp_sig_sampling_rate = edf_sampling_rates[tmp_target_index]
+        tmp_sig = tmp_mesa_edf_f.readSignal(tmp_target_index)
+        # label 이나 edf 길이로 slicing
+        tmp_sig = tmp_sig[int(tmp_sig_sampling_rate * edf_time_sec_start):int(tmp_sig_sampling_rate * edf_time_sec_start) + int(tmp_sig_sampling_rate * edf_time_sec_end)]
+
+        if tst:
+            # 받은 신호를 tst에 맞게 slicing (tib - tst 시작시간 ~ tst 기준 duration)
+            tmp_sig_start_point_tst = int(tmp_sig_sampling_rate * time_diff_tst)
+            tmp_sig_end_point_tst = int(tmp_sig_sampling_rate * time_diff_tst) + int(tmp_sig_sampling_rate * time_duration_tst)
+            tmp_sig = tmp_sig[tmp_sig_start_point_tst:tmp_sig_end_point_tst]
+
+        sigs.append(tmp_sig)
+        sampling_rates.append(tmp_sig_sampling_rate)
+    # tmp_mesa_edf_f 닫기
+    tmp_mesa_edf_f._close()
+    # label 처리
+    apnea, hypopnea, sleep_stage, desaturation, arousal = read_label(subject_name, fs=label_fs, data_path=label_path)
+    # label 이나 edf 길이로 slicing
+    apnea = apnea[int(label_fs * label_time_sec_start):int(label_fs * label_time_sec_start) + int(label_fs * edf_time_sec_end)]
+    hypopnea = hypopnea[int(label_fs * label_time_sec_start):int(label_fs * label_time_sec_start) + int(label_fs * edf_time_sec_end)]
+    sleep_stage = sleep_stage[int(label_fs * label_time_sec_start):int(label_fs * label_time_sec_start) + int(label_fs * edf_time_sec_end)]
+    desaturation = desaturation[int(label_fs * label_time_sec_start):int(label_fs * label_time_sec_start) + int(label_fs * edf_time_sec_end)]
+    arousal = arousal[int(label_fs * label_time_sec_start):int(label_fs * label_time_sec_start) + int(label_fs * edf_time_sec_end)]
+
+    if tst:
+        # 받은 신호를 tst에 맞게 slicing (tib - tst 시작시간 ~ tst 기준 duration)
+        label_start_point_tst = int(label_fs * time_diff_tst)
+        label_end_point_tst = int(label_fs * time_diff_tst) + int(label_fs * time_duration_tst)
+        apnea = apnea[label_start_point_tst:label_end_point_tst]
+        hypopnea = hypopnea[label_start_point_tst:label_end_point_tst]
+        sleep_stage = sleep_stage[label_start_point_tst:label_end_point_tst]
+        desaturation = desaturation[label_start_point_tst:label_end_point_tst]
+        arousal = arousal[label_start_point_tst:label_end_point_tst]
+
+    # label과 signal의 길이가 맞치안으면 에러 출력
+    if len(apnea) / 10 != len(sigs[0]) / sampling_rates[0]:
+        raise ValueError('label length and signal length dismatch')
+
+    return {'signal':{tmp_key: sigs[idx] for idx, tmp_key in enumerate(sig_labels)},
+            'label': {'apnea': apnea,
+                      'hypopnea': hypopnea,
+                      'sleep_stage': sleep_stage,
+                      'desaturation': desaturation,
+                      'arousal': arousal},
+            'info': {'sampling_rate_sig': {tmp_key: sampling_rates[idx] for idx, tmp_key in enumerate(sig_labels)}}}
+
+
+def time_diff(start, end):
+    start = datetime.strptime(start, '%H:%M:%S')
+    end = datetime.strptime(end, '%H:%M:%S')
+    if isinstance(start, datetime_time): # convert to datetime
+        assert isinstance(end, datetime_time)
+        start, end = [datetime.combine(datetime.min, t) for t in [start, end]]
+    if start <= end: # e.g., 10:33:26-11:15:49
+        return end - start
+    else: # end < start e.g., 23:55:00-00:25:00
+        end += timedelta(1) # +day
+        assert end > start
+        return end - start
