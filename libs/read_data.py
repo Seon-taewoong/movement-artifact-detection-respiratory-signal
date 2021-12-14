@@ -427,9 +427,7 @@ def xml_parsing_start_info_flag_ver(xml_doc):
 
     return tmp_start_sec, tmp_end_sec, flag
 
-
-
-# function
+  
 def time_slice_with_sleep_stage(subject_name, data_path='./label', tst=True):
     """:cvar
     subject의 파일 이름을 인자로 받아 해당 subject에 해당하는 annotation 값을 읽어 wake가 제외한
