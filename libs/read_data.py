@@ -1,13 +1,13 @@
-## system packages
+# system packages
 import xml.etree.ElementTree as ET
 from datetime import datetime, time as datetime_time, timedelta
 import os
-## sud-party packages
+# 3-party packages
 import pyedflib
 import numpy as np
 from pandas import DataFrame, read_csv
 from biosppy.signals import tools as st
-## custom packages
+# custom packages
 from libs.signals import smoothing
 from libs.signals import make_edr, make_hr, interpolation_1d
 

@@ -1,9 +1,9 @@
-## system packages
+# system packages
 import os
-## sud-party packages
+# 3-party packages
 import numpy as np
 from matplotlib import pyplot as plt
-## custom packages
+# custom packages
 from libs.signals import interpolation_1d
 from libs.signal_search import bio_signal_marker
 from libs.read_data import read_edf_file

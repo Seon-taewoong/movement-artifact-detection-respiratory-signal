@@ -1,6 +1,9 @@
+# system packages
+# 3-party packages
 import numpy as np
 from scipy import signal
 from scipy.interpolate import interp1d, interpolate
+# custom packages
 
 
 def interpolation_1d(data, outPutLen, interpol_type='linear'):

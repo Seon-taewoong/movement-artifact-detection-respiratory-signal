@@ -1,9 +1,13 @@
+# system packages
+import copy
+from queue import deque
+# 3-party packages
 import numpy as np
 from matplotlib.widgets import RectangleSelector
 from matplotlib import pyplot as plt
-import copy
-from queue import deque
 from scipy.interpolate import interp1d
+# custom packages
+
 
 class bio_signal_marker:
     def __init__(self, ts, signal, signal2, label, fs, wheel_sec = 2, screen_sec = 20):
