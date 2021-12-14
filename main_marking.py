@@ -22,5 +22,5 @@ if __name__ == '__main__':
     ## data visuallization
     ts = range(len(abdo))
     data_visuallization_object = bio_signal_marker(ts, abdo, abdo, annotation,
-                                                   abdo_fs, wheel_sec = 100, screen_sec = 300)
+                                                   abdo_fs, wheel_sec=100, screen_sec=300)
     data_visuallization_object.run()
