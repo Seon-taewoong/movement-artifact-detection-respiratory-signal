@@ -1,6 +1,6 @@
 # system packages
 import copy
-from queue import deque
+from collections import deque
 # 3-party packages
 import numpy as np
 from matplotlib.widgets import RectangleSelector
